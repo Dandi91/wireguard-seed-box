@@ -1,0 +1,10 @@
+[Unit]
+Description=Torrent jail
+After=network.target
+Requires=network.target
+
+[Service]
+User=root
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/etc/network/setup-torrent-jail

@@ -1,0 +1,66 @@
+#!/bin/bash
+
+NS_NAME=tun_ns
+UPSTREAM_IFACE=eth0
+UPSTREAM_NETWORK_IP_MASK=192.168.0.0/24
+RPC_PORT=9091
+LOCAL_ACCESSED_IPS=("1.1.1.1" "8.8.8.8")
+
+TUNNEL_IFACE=wg0
+TUNNEL_IP_MASK=10.8.0.2/24
+TUNNEL_PEER_MTU=1420
+
+PAIR_INTERNAL_IFACE=vin
+PAIR_EXTERNAL_IFACE=vout
+PAIR_INTERNAL_IP_MASK=10.69.0.1/30
+PAIR_EXTERNAL_IP_MASK=10.69.0.2/30
+
+get_ip() { echo $1 | cut -d / -f 1; }
+
+TUNNEL_IP=$(get_ip $TUNNEL_IP_MASK)
+PAIR_INTERNAL_IP=$(get_ip $PAIR_INTERNAL_IP_MASK)
+PAIR_EXTERNAL_IP=$(get_ip $PAIR_EXTERNAL_IP_MASK)
+
+
+# create network namespace
+ip netns add $NS_NAME
+
+# start wireguard inside the namespace
+ip link add $TUNNEL_IFACE type wireguard
+ip link set $TUNNEL_IFACE netns $NS_NAME
+ip -n $NS_NAME addr add $TUNNEL_IP_MASK dev $TUNNEL_IFACE
+ip -n $NS_NAME link set dev $TUNNEL_IFACE mtu $TUNNEL_PEER_MTU
+ip netns exec $NS_NAME wg setconf $TUNNEL_IFACE /etc/wireguard/${TUNNEL_IFACE}.conf
+ip -n $NS_NAME link set $TUNNEL_IFACE up
+
+# create interface pair to access local network from the namespace (vout <-> vin)
+ip link add $PAIR_INTERNAL_IFACE type veth peer name $PAIR_EXTERNAL_IFACE
+
+# move and configure internal interface (vin)
+ip link set $PAIR_INTERNAL_IFACE netns $NS_NAME
+ip -n $NS_NAME addr add $PAIR_INTERNAL_IP_MASK dev $PAIR_INTERNAL_IFACE
+ip -n $NS_NAME link set $PAIR_INTERNAL_IFACE up
+
+# configure external interface (vout)
+ip addr add $PAIR_EXTERNAL_IP_MASK dev $PAIR_EXTERNAL_IFACE
+ip link set $PAIR_EXTERNAL_IFACE up
+
+# configure routing
+# set wg0 as default gateway inside the namespace
+ip -n $NS_NAME route add default dev $TUNNEL_IFACE src $TUNNEL_IP
+# route local network through vin
+ip -n $NS_NAME route add $UPSTREAM_NETWORK_IP_MASK via $PAIR_EXTERNAL_IP src $PAIR_INTERNAL_IP
+# route some IPs through vin
+for LOCAL_ACCESSED_IP in ${LOCAL_ACCESSED_IPS[@]}; do
+  ip -n $NS_NAME route add $LOCAL_ACCESSED_IP via $PAIR_EXTERNAL_IP
+done
+
+# configure iptables
+# setup traffic forwarding vout -> eth0
+iptables -A FORWARD -i $PAIR_EXTERNAL_IFACE -o $UPSTREAM_IFACE -j ACCEPT
+iptables -A FORWARD -i $UPSTREAM_IFACE -o $PAIR_EXTERNAL_IFACE -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -t nat -A POSTROUTING -o $UPSTREAM_IFACE -s $PAIR_INTERNAL_IP -j MASQUERADE
+
+# setup tcp/9091 forwarding to 10.69.0.1
+iptables -A FORWARD -i $UPSTREAM_IFACE -o $PAIR_EXTERNAL_IFACE -p tcp --dport $RPC_PORT -m conntrack --ctstate NEW -j ACCEPT
+iptables -t nat -A PREROUTING -i $UPSTREAM_IFACE -p tcp --dport $RPC_PORT -j DNAT --to-destination $PAIR_INTERNAL_IP
