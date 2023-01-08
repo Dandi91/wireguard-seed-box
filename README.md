@@ -1,6 +1,6 @@
 # WireGuard Seed Box
 
-A guide to set up a torrent client on your local server to download and upload through the remote server.
+A guide to set up a torrent client on your local server that downloads and seeds through a remote server.
 
 1. WireGuard tunnel and peer port forwarding
 2. Torrent ~~jail~~ separate network namespace
@@ -241,7 +241,7 @@ sudo ip netns pids tun_ns
 Now it is time to finally configure our torrent client. Again, here I will be using Transmission as an example, but I'm
 sure most of the remotely-controlled clients have a way to set this up.
 
-The full config description of the Transmission can be found 
+The full description of the Transmission config can be found 
 [here](https://github.com/transmission/transmission/blob/main/docs/Editing-Configuration-Files.md). This guide covers 
 only settings related to the networking part, the rest of the Transmission setup you can find online. 
 
